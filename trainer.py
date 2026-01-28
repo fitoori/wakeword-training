@@ -1,10 +1,67 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 IFS=$'\n\t'
-umask "${UMASK:-022}"
 
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_VERSION="1.0.0"
+
+# ------------------------------
+# Usage
+# ------------------------------
+usage() {
+  cat <<EOF
+${SCRIPT_NAME} v${SCRIPT_VERSION}
+
+Usage:
+  ${SCRIPT_NAME} [options]
+
+Options:
+  --destination PATH         Base workspace directory (overrides BASE_DIR).
+  --base-dir PATH            Alias for --destination.
+  --runs-dir PATH            Overrides RUNS_DIR.
+  --logs-dir PATH            Overrides LOGS_DIR.
+  --venv-dir PATH            Overrides VENV_DIR.
+  --oww-repo-dir PATH         Overrides OWW_REPO_DIR.
+  --custom-models-dir PATH    Overrides CUSTOM_MODELS_DIR.
+  --min-free-disk-gb NUMBER  Overrides MIN_FREE_DISK_GB.
+  --allow-low-disk           Proceed even if free disk is below the minimum.
+  --install-optional-apt 0|1 Overrides INSTALL_OPTIONAL_APT.
+  --wake-phrase TEXT         Overrides WAKE_PHRASE.
+  --train-profile NAME       Overrides TRAIN_PROFILE (tiny|medium|large).
+  --train-threads NUMBER     Overrides TRAIN_THREADS.
+  --wyoming-piper-host HOST  Overrides WYOMING_PIPER_HOST.
+  --wyoming-piper-port PORT  Overrides WYOMING_PIPER_PORT.
+  --wyoming-oww-host HOST    Overrides WYOMING_OPENWAKEWORD_HOST.
+  --wyoming-oww-port PORT    Overrides WYOMING_OPENWAKEWORD_PORT.
+  --umask MASK               Overrides UMASK (e.g., 022).
+  --help, -h                 Show this help and exit.
+
+Environment overrides (if no flags provided):
+  BASE_DIR, ALLOW_LOW_DISK, MIN_FREE_DISK_GB, RUNS_DIR, LOGS_DIR, VENV_DIR,
+  OWW_REPO_DIR, CUSTOM_MODELS_DIR, TRAIN_PROFILE, TRAIN_THREADS, WAKE_PHRASE,
+  INSTALL_OPTIONAL_APT, WYOMING_PIPER_HOST, WYOMING_PIPER_PORT,
+  WYOMING_OPENWAKEWORD_HOST, WYOMING_OPENWAKEWORD_PORT, UMASK.
+EOF
+}
+
+# Parsed CLI values (empty means "not provided")
+CLI_BASE_DIR=""
+CLI_RUNS_DIR=""
+CLI_LOGS_DIR=""
+CLI_VENV_DIR=""
+CLI_OWW_REPO_DIR=""
+CLI_CUSTOM_MODELS_DIR=""
+CLI_MIN_FREE_DISK_GB=""
+CLI_ALLOW_LOW_DISK=0
+CLI_INSTALL_OPTIONAL_APT=""
+CLI_WAKE_PHRASE=""
+CLI_TRAIN_PROFILE=""
+CLI_TRAIN_THREADS=""
+CLI_WYOMING_PIPER_HOST=""
+CLI_WYOMING_PIPER_PORT=""
+CLI_WYOMING_OWW_HOST=""
+CLI_WYOMING_OWW_PORT=""
+CLI_UMASK=""
 
 # ------------------------------
 # Logging / Error handling
@@ -167,6 +224,17 @@ validate_base_dir() {
   fi
 }
 
+expand_tilde() {
+  local path="${1:?}"
+  if [[ "$path" == "~" ]]; then
+    echo "$HOME"
+  elif [[ "$path" == "~/"* ]]; then
+    echo "${HOME}${path:1}"
+  else
+    echo "$path"
+  fi
+}
+
 slugify() {
   # Lowercase, keep alnum, convert spaces/dashes to underscore, collapse repeats.
   echo -n "${1:?}" \
@@ -261,7 +329,233 @@ EOF
 # ------------------------------
 # Main
 # ------------------------------
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --allow-low-disk)
+        CLI_ALLOW_LOW_DISK=1
+        shift
+        ;;
+      --base-dir|--destination)
+        [[ -n "${2:-}" ]] || die "--destination requires a path."
+        CLI_BASE_DIR="$2"
+        shift 2
+        ;;
+      --base-dir=*)
+        CLI_BASE_DIR="${1#*=}"
+        shift
+        ;;
+      --destination=*)
+        CLI_BASE_DIR="${1#*=}"
+        shift
+        ;;
+      --runs-dir)
+        [[ -n "${2:-}" ]] || die "--runs-dir requires a path."
+        CLI_RUNS_DIR="$2"
+        shift 2
+        ;;
+      --runs-dir=*)
+        CLI_RUNS_DIR="${1#*=}"
+        shift
+        ;;
+      --logs-dir)
+        [[ -n "${2:-}" ]] || die "--logs-dir requires a path."
+        CLI_LOGS_DIR="$2"
+        shift 2
+        ;;
+      --logs-dir=*)
+        CLI_LOGS_DIR="${1#*=}"
+        shift
+        ;;
+      --venv-dir)
+        [[ -n "${2:-}" ]] || die "--venv-dir requires a path."
+        CLI_VENV_DIR="$2"
+        shift 2
+        ;;
+      --venv-dir=*)
+        CLI_VENV_DIR="${1#*=}"
+        shift
+        ;;
+      --oww-repo-dir)
+        [[ -n "${2:-}" ]] || die "--oww-repo-dir requires a path."
+        CLI_OWW_REPO_DIR="$2"
+        shift 2
+        ;;
+      --oww-repo-dir=*)
+        CLI_OWW_REPO_DIR="${1#*=}"
+        shift
+        ;;
+      --custom-models-dir)
+        [[ -n "${2:-}" ]] || die "--custom-models-dir requires a path."
+        CLI_CUSTOM_MODELS_DIR="$2"
+        shift 2
+        ;;
+      --custom-models-dir=*)
+        CLI_CUSTOM_MODELS_DIR="${1#*=}"
+        shift
+        ;;
+      --min-free-disk-gb)
+        [[ -n "${2:-}" ]] || die "--min-free-disk-gb requires a number."
+        CLI_MIN_FREE_DISK_GB="$2"
+        shift 2
+        ;;
+      --min-free-disk-gb=*)
+        CLI_MIN_FREE_DISK_GB="${1#*=}"
+        shift
+        ;;
+      --install-optional-apt)
+        [[ -n "${2:-}" ]] || die "--install-optional-apt requires 0 or 1."
+        CLI_INSTALL_OPTIONAL_APT="$2"
+        shift 2
+        ;;
+      --install-optional-apt=*)
+        CLI_INSTALL_OPTIONAL_APT="${1#*=}"
+        shift
+        ;;
+      --wake-phrase)
+        [[ -n "${2:-}" ]] || die "--wake-phrase requires text."
+        CLI_WAKE_PHRASE="$2"
+        shift 2
+        ;;
+      --wake-phrase=*)
+        CLI_WAKE_PHRASE="${1#*=}"
+        shift
+        ;;
+      --train-profile)
+        [[ -n "${2:-}" ]] || die "--train-profile requires a value."
+        CLI_TRAIN_PROFILE="$2"
+        shift 2
+        ;;
+      --train-profile=*)
+        CLI_TRAIN_PROFILE="${1#*=}"
+        shift
+        ;;
+      --train-threads)
+        [[ -n "${2:-}" ]] || die "--train-threads requires a number."
+        CLI_TRAIN_THREADS="$2"
+        shift 2
+        ;;
+      --train-threads=*)
+        CLI_TRAIN_THREADS="${1#*=}"
+        shift
+        ;;
+      --wyoming-piper-host)
+        [[ -n "${2:-}" ]] || die "--wyoming-piper-host requires a host."
+        CLI_WYOMING_PIPER_HOST="$2"
+        shift 2
+        ;;
+      --wyoming-piper-host=*)
+        CLI_WYOMING_PIPER_HOST="${1#*=}"
+        shift
+        ;;
+      --wyoming-piper-port)
+        [[ -n "${2:-}" ]] || die "--wyoming-piper-port requires a port."
+        CLI_WYOMING_PIPER_PORT="$2"
+        shift 2
+        ;;
+      --wyoming-piper-port=*)
+        CLI_WYOMING_PIPER_PORT="${1#*=}"
+        shift
+        ;;
+      --wyoming-oww-host)
+        [[ -n "${2:-}" ]] || die "--wyoming-oww-host requires a host."
+        CLI_WYOMING_OWW_HOST="$2"
+        shift 2
+        ;;
+      --wyoming-oww-host=*)
+        CLI_WYOMING_OWW_HOST="${1#*=}"
+        shift
+        ;;
+      --wyoming-oww-port)
+        [[ -n "${2:-}" ]] || die "--wyoming-oww-port requires a port."
+        CLI_WYOMING_OWW_PORT="$2"
+        shift 2
+        ;;
+      --wyoming-oww-port=*)
+        CLI_WYOMING_OWW_PORT="${1#*=}"
+        shift
+        ;;
+      --umask)
+        [[ -n "${2:-}" ]] || die "--umask requires a value."
+        CLI_UMASK="$2"
+        shift 2
+        ;;
+      --umask=*)
+        CLI_UMASK="${1#*=}"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        die "Unknown argument: $1. Use --help for usage."
+        ;;
+    esac
+  done
+}
+
 main() {
+  parse_args "$@"
+
+  if [[ -n "$CLI_BASE_DIR" ]]; then
+    BASE_DIR="$CLI_BASE_DIR"
+  fi
+  if [[ "$CLI_ALLOW_LOW_DISK" == "1" ]]; then
+    ALLOW_LOW_DISK=1
+  fi
+  if [[ -n "$CLI_MIN_FREE_DISK_GB" ]]; then
+    MIN_FREE_DISK_GB="$CLI_MIN_FREE_DISK_GB"
+  fi
+  if [[ -n "$CLI_RUNS_DIR" ]]; then
+    RUNS_DIR="$CLI_RUNS_DIR"
+  fi
+  if [[ -n "$CLI_LOGS_DIR" ]]; then
+    LOGS_DIR="$CLI_LOGS_DIR"
+  fi
+  if [[ -n "$CLI_VENV_DIR" ]]; then
+    VENV_DIR="$CLI_VENV_DIR"
+  fi
+  if [[ -n "$CLI_OWW_REPO_DIR" ]]; then
+    OWW_REPO_DIR="$CLI_OWW_REPO_DIR"
+  fi
+  if [[ -n "$CLI_CUSTOM_MODELS_DIR" ]]; then
+    CUSTOM_MODELS_DIR="$CLI_CUSTOM_MODELS_DIR"
+  fi
+  if [[ -n "$CLI_INSTALL_OPTIONAL_APT" ]]; then
+    INSTALL_OPTIONAL_APT="$CLI_INSTALL_OPTIONAL_APT"
+  fi
+  if [[ -n "$CLI_WAKE_PHRASE" ]]; then
+    WAKE_PHRASE="$CLI_WAKE_PHRASE"
+  fi
+  if [[ -n "$CLI_TRAIN_PROFILE" ]]; then
+    TRAIN_PROFILE="$CLI_TRAIN_PROFILE"
+  fi
+  if [[ -n "$CLI_TRAIN_THREADS" ]]; then
+    TRAIN_THREADS="$CLI_TRAIN_THREADS"
+  fi
+  if [[ -n "$CLI_WYOMING_PIPER_HOST" ]]; then
+    WYOMING_PIPER_HOST="$CLI_WYOMING_PIPER_HOST"
+  fi
+  if [[ -n "$CLI_WYOMING_PIPER_PORT" ]]; then
+    WYOMING_PIPER_PORT="$CLI_WYOMING_PIPER_PORT"
+  fi
+  if [[ -n "$CLI_WYOMING_OWW_HOST" ]]; then
+    WYOMING_OPENWAKEWORD_HOST="$CLI_WYOMING_OWW_HOST"
+  fi
+  if [[ -n "$CLI_WYOMING_OWW_PORT" ]]; then
+    WYOMING_OPENWAKEWORD_PORT="$CLI_WYOMING_OWW_PORT"
+  fi
+  if [[ -n "$CLI_UMASK" ]]; then
+    UMASK="$CLI_UMASK"
+  fi
+
+  umask "${UMASK:-022}"
+
   require_cmd bash
   require_cmd python3
   require_cmd timeout
@@ -291,12 +585,17 @@ main() {
 
   # Workspace layout
   local base_dir="${BASE_DIR:-$HOME/wakeword_lab}"
+  base_dir="$(expand_tilde "$base_dir")"
   local repo_dir="${OWW_REPO_DIR:-$base_dir/openWakeWord}"
   local venv_dir="${VENV_DIR:-$base_dir/venv}"
   local runs_dir="${RUNS_DIR:-$base_dir/training_runs}"
   local logs_dir="${LOGS_DIR:-$base_dir/logs}"
   local custom_models_dir="${CUSTOM_MODELS_DIR:-$base_dir/custom_models}"
-  local data_dir="${DATA_DIR:-$base_dir/data}"
+  repo_dir="$(expand_tilde "$repo_dir")"
+  venv_dir="$(expand_tilde "$venv_dir")"
+  runs_dir="$(expand_tilde "$runs_dir")"
+  logs_dir="$(expand_tilde "$logs_dir")"
+  custom_models_dir="$(expand_tilde "$custom_models_dir")"
 
   validate_base_dir "$base_dir"
   mkdir -p "$base_dir" "$runs_dir" "$logs_dir" "$custom_models_dir" "$data_dir"
