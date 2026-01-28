@@ -591,11 +591,13 @@ main() {
   local runs_dir="${RUNS_DIR:-$base_dir/training_runs}"
   local logs_dir="${LOGS_DIR:-$base_dir/logs}"
   local custom_models_dir="${CUSTOM_MODELS_DIR:-$base_dir/custom_models}"
+  local data_dir="${DATA_DIR:-$base_dir/data}"
   repo_dir="$(expand_tilde "$repo_dir")"
   venv_dir="$(expand_tilde "$venv_dir")"
   runs_dir="$(expand_tilde "$runs_dir")"
   logs_dir="$(expand_tilde "$logs_dir")"
   custom_models_dir="$(expand_tilde "$custom_models_dir")"
+  data_dir="$(expand_tilde "$data_dir")"
 
   validate_base_dir "$base_dir"
   mkdir -p "$base_dir" "$runs_dir" "$logs_dir" "$custom_models_dir" "$data_dir"
