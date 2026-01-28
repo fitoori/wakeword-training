@@ -7,6 +7,27 @@ readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_VERSION="1.0.0"
 
 # ------------------------------
+# Usage
+# ------------------------------
+usage() {
+  cat <<EOF
+${SCRIPT_NAME} v${SCRIPT_VERSION}
+
+Usage:
+  ${SCRIPT_NAME} [--destination PATH] [--allow-low-disk] [--help]
+
+Options:
+  --destination PATH  Base workspace directory (overrides BASE_DIR).
+  --allow-low-disk    Proceed even if free disk is below the minimum.
+  --help, -h          Show this help and exit.
+
+Environment overrides (if no flags provided):
+  BASE_DIR, ALLOW_LOW_DISK, MIN_FREE_DISK_GB, RUNS_DIR, LOGS_DIR, VENV_DIR,
+  OWW_REPO_DIR, CUSTOM_MODELS_DIR, TRAIN_PROFILE, TRAIN_THREADS, WAKE_PHRASE.
+EOF
+}
+
+# ------------------------------
 # Logging / Error handling
 # ------------------------------
 timestamp_utc() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
@@ -167,6 +188,17 @@ validate_base_dir() {
   fi
 }
 
+expand_tilde() {
+  local path="${1:?}"
+  if [[ "$path" == "~" ]]; then
+    echo "$HOME"
+  elif [[ "$path" == "~/"* ]]; then
+    echo "${HOME}${path:1}"
+  else
+    echo "$path"
+  fi
+}
+
 slugify() {
   # Lowercase, keep alnum, convert spaces/dashes to underscore, collapse repeats.
   echo -n "${1:?}" \
@@ -261,7 +293,53 @@ EOF
 # ------------------------------
 # Main
 # ------------------------------
+parse_args() {
+  local -n _dest_ref=$1
+  local -n _allow_low_disk_ref=$2
+  shift 2
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --allow-low-disk)
+        _allow_low_disk_ref=1
+        shift
+        ;;
+      --destination)
+        [[ -n "${2:-}" ]] || die "--destination requires a path."
+        _dest_ref="$2"
+        shift 2
+        ;;
+      --destination=*)
+        _dest_ref="${1#*=}"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        die "Unknown argument: $1. Use --help for usage."
+        ;;
+    esac
+  done
+}
+
 main() {
+  local destination=""
+  local allow_low_disk=0
+  parse_args destination allow_low_disk "$@"
+
+  if [[ -n "$destination" ]]; then
+    BASE_DIR="$destination"
+  fi
+  if [[ "$allow_low_disk" == "1" ]]; then
+    ALLOW_LOW_DISK=1
+  fi
+
   require_cmd bash
   require_cmd python3
   require_cmd timeout
@@ -288,6 +366,7 @@ main() {
 
   # Workspace layout
   local base_dir="${BASE_DIR:-$HOME/wakeword_lab}"
+  base_dir="$(expand_tilde "$base_dir")"
   local repo_dir="${OWW_REPO_DIR:-$base_dir/openWakeWord}"
   local venv_dir="${VENV_DIR:-$base_dir/venv}"
   local runs_dir="${RUNS_DIR:-$base_dir/training_runs}"
