@@ -219,6 +219,45 @@ print(f"IMPORT_OK {m}")
 PY
 }
 
+install_tflite_runtime_if_available() {
+  log "Checking availability of tflite-runtime..."
+
+  # Case 1: Already importable (someone installed it earlier)
+  if python - <<'EOF' >/dev/null 2>&1
+import tflite_runtime.interpreter
+EOF
+  then
+    log "tflite-runtime already importable; skipping install."
+    return 0
+  fi
+
+  # Case 2: Available via APT (preferred on Raspberry Pi)
+  if command -v apt-cache >/dev/null 2>&1 && apt-cache show python3-tflite-runtime >/dev/null 2>&1; then
+    if ! dpkg -s python3-tflite-runtime >/dev/null 2>&1; then
+      log "Installing tflite-runtime via APT (python3-tflite-runtime)..."
+      sudo_maybe apt-get install -y --no-install-recommends python3-tflite-runtime
+    else
+      log "python3-tflite-runtime already installed via APT."
+    fi
+
+    # Verify
+    if python - <<'EOF' >/dev/null 2>&1
+import tflite_runtime.interpreter
+EOF
+    then
+      log "tflite-runtime usable after APT install."
+      return 0
+    else
+      log "WARNING: python3-tflite-runtime installed but not importable."
+      return 1
+    fi
+  fi
+
+  # Case 3: Not available → explicitly skip
+  log "tflite-runtime not available for this OS/Python/arch; skipping (OK for training)."
+  return 0
+}
+
 # ------------------------------
 # Main
 # ------------------------------
@@ -374,6 +413,7 @@ main() {
 
   # Install baseline Python deps (best-effort superset for training flows)
   log "Installing Python packages (best-effort superset for openWakeWord training + Piper dataset gen)..."
+  install_tflite_runtime_if_available || log "WARNING: tflite-runtime setup failed; continuing without it."
   pip_install \
     pyyaml \
     numpy \
@@ -385,7 +425,6 @@ main() {
     scikit-learn \
     onnx \
     onnxruntime \
-    tflite-runtime \
     datasets \
     speechbrain \
     piper-tts
