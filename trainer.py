@@ -266,6 +266,9 @@ main() {
   require_cmd python3
   require_cmd timeout
 
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
   local host_piper="${WYOMING_PIPER_HOST:-127.0.0.1}"
   local port_piper="${WYOMING_PIPER_PORT:-10200}"   # common wyoming-piper port :contentReference[oaicite:3]{index=3}
   local host_oww="${WYOMING_OPENWAKEWORD_HOST:-127.0.0.1}"
@@ -293,9 +296,10 @@ main() {
   local runs_dir="${RUNS_DIR:-$base_dir/training_runs}"
   local logs_dir="${LOGS_DIR:-$base_dir/logs}"
   local custom_models_dir="${CUSTOM_MODELS_DIR:-$base_dir/custom_models}"
+  local data_dir="${DATA_DIR:-$base_dir/data}"
 
   validate_base_dir "$base_dir"
-  mkdir -p "$base_dir" "$runs_dir" "$logs_dir" "$custom_models_dir"
+  mkdir -p "$base_dir" "$runs_dir" "$logs_dir" "$custom_models_dir" "$data_dir"
   require_free_disk_gb "$base_dir" "${MIN_FREE_DISK_GB:-8}"
 
   local apt_stamp="$logs_dir/.apt_updated"
@@ -471,6 +475,8 @@ PY
   local run_id
   run_id="$(date -u +%Y%m%dT%H%M%SZ)"
   local run_dir="$runs_dir/${model_slug}_${run_id}"
+  local dataset_dir="$run_dir/dataset"
+  local dataset_json="$dataset_dir/dataset.json"
   mkdir -p "$run_dir"
 
   # Choose epochs as a simple mapping (best-effort; will only apply if YAML has an epoch key we recognize)
@@ -490,7 +496,7 @@ PY
 
   # Patch YAML (best-effort; only touches known key names if present)
   log "Patching training config (best-effort) -> $cfg_out"
-  RUN_DIR="$run_dir" python - <<PY
+  RUN_DIR="$run_dir" DATASET_JSON="$dataset_json" python - <<PY
 import os, sys
 import yaml
 
@@ -499,6 +505,7 @@ wake_phrase = "${wake_phrase}"
 model_slug = "${model_slug}"
 epochs = int("${epochs}")
 run_dir = os.environ.get("RUN_DIR", "")
+dataset_json = os.environ.get("DATASET_JSON", "")
 
 with open(cfg_path, "r", encoding="utf-8") as f:
     cfg = yaml.safe_load(f)
@@ -528,6 +535,10 @@ for k in ("output_dir", "model_output_dir", "export_dir"):
     if run_dir:
         set_key_recursive(cfg, k, run_dir)
 
+for k in ("dataset_path", "dataset_json", "custom_dataset_path", "custom_dataset"):
+    if dataset_json:
+        set_key_recursive(cfg, k, dataset_json)
+
 for k in ("epochs", "n_epochs", "num_epochs", "max_epochs"):
     set_key_recursive(cfg, k, epochs)
 
@@ -554,6 +565,16 @@ RUN_DIR="${run_dir}"
 CFG_PATH="${cfg_out}"
 CUSTOM_MODELS_DIR="${custom_models_dir}"
 TRAIN_THREADS="${train_threads}"
+DATA_DIR="${data_dir}"
+DATASET_DIR="${dataset_dir}"
+DATASET_JSON="${dataset_json}"
+GENERATE_DATASET="${script_dir}/generate_dataset.py"
+POSITIVE_SOURCES="${POSITIVE_SOURCES:-}"
+NEGATIVE_SOURCES="${NEGATIVE_SOURCES:-}"
+MAX_POSITIVE_SAMPLES="${MAX_POSITIVE_SAMPLES:-}"
+MAX_NEGATIVE_SAMPLES="${MAX_NEGATIVE_SAMPLES:-}"
+MIN_PER_SOURCE="${MIN_PER_SOURCE:-}"
+DATASET_SEED="${DATASET_SEED:-42}"
 
 [[ -f "\$VENV_DIR/bin/activate" ]] || die "Missing venv activate script: \$VENV_DIR/bin/activate"
 # shellcheck disable=SC1091
@@ -575,6 +596,22 @@ log "Training start"
 log "Config: \$CFG_PATH"
 log "Run dir: \$RUN_DIR"
 log "Threads: \$TRAIN_THREADS"
+
+# Ensure a diverse dataset manifest before training.
+if [[ -f "\$GENERATE_DATASET" ]]; then
+  log "Generating diversified dataset manifest..."
+  python "\$GENERATE_DATASET" \\
+    --output-dir "\$DATASET_DIR" \\
+    --wake-phrase "${wake_phrase}" \\
+    --positive-sources "\${POSITIVE_SOURCES:-\$DATA_DIR/positives}" \\
+    --negative-sources "\${NEGATIVE_SOURCES:-\$DATA_DIR/negatives}" \\
+    --max-positives "\${MAX_POSITIVE_SAMPLES}" \\
+    --max-negatives "\${MAX_NEGATIVE_SAMPLES}" \\
+    --min-per-source "\${MIN_PER_SOURCE}" \\
+    --seed "\${DATASET_SEED}"
+else
+  log "WARNING: generate_dataset.py not found at \$GENERATE_DATASET; skipping dataset manifest generation."
+fi
 
 # openWakeWord training script is driven by a YAML config and supports step flags in typical flows. :contentReference[oaicite:5]{index=5}
 # NOTE: If upstream flags change, this will fail loudly and you must adjust the command.
