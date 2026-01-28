@@ -739,8 +739,8 @@ main() {
     datasets
     speechbrain
   )
-  if [[ "$have_local_wyoming_piper" -eq 1 ]]; then
-    log "Local wyoming-piper detected; skipping piper-tts install."
+  if [[ "$have_wyoming_piper" -eq 1 || "$have_local_wyoming_piper" -eq 1 ]]; then
+    log "Wyoming piper detected; skipping piper-tts install."
   else
     pip_pkgs+=(piper-tts)
   fi
@@ -756,15 +756,19 @@ main() {
 
   # Install openWakeWord from the repo (editable)
   local skip_openwakeword_install=0
-  if [[ "$have_local_wyoming_oww" -eq 1 ]] && python_import_check openwakeword >/dev/null 2>&1; then
+  if [[ "$have_wyoming_oww" -eq 1 || "$have_local_wyoming_oww" -eq 1 ]] \
+    && python_import_check openwakeword >/dev/null 2>&1; then
     skip_openwakeword_install=1
-    log "Local wyoming-openwakeword detected and openwakeword importable; skipping editable install."
+    log "Wyoming openwakeword detected and openwakeword importable; skipping editable install."
   fi
 
   if [[ "$skip_openwakeword_install" -eq 0 ]]; then
     log "Installing openWakeWord from local repo (editable)..."
     if ! python -m pip install -e "$repo_dir" ; then
-      die "Failed to install openWakeWord from $repo_dir"
+      log "WARNING: Editable install failed. Retrying without dependency resolution (pip --no-deps)."
+      if ! python -m pip install -e "$repo_dir" --no-deps ; then
+        die "Failed to install openWakeWord from $repo_dir"
+      fi
     fi
     python_import_check openwakeword >/dev/null 2>&1 || die "openwakeword import check failed after install."
   fi
